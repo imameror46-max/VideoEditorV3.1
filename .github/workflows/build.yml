@@ -1,0 +1,57 @@
+name: Build APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Cek file
+        run: test -f pubspec.yaml && test -f main.dart && test -f models.dart && test -f engine.dart
+      - name: Buat proyek Android
+        run: |
+          cp pubspec.yaml /tmp/pubspec.yaml
+          flutter create --platforms=android --org com.gabungmedia --project-name gabung_media .
+          cp /tmp/pubspec.yaml pubspec.yaml
+          cp main.dart models.dart engine.dart lib/
+          f=$(ls android/app/build.gradle*)
+          sed -i -E 's/minSdk(Version)? *=? *flutter\.minSdkVersion/minSdk = 24/' "$f"
+          sed -i -E 's/compileSdk(Version)? *=? *flutter\.compileSdkVersion/compileSdk = 36/' "$f"
+          sed -i '0,/<application/s//<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"\/>\n    <application/' android/app/src/main/AndroidManifest.xml
+      - name: Paksa semua plugin pakai Android 36
+        run: |
+          mkdir -p ~/.gradle
+          cat > ~/.gradle/init.gradle <<'EOF'
+          allprojects {
+            afterEvaluate { p ->
+              def a = p.extensions.findByName('android')
+              if (a != null) { a.compileSdkVersion(36) }
+            }
+          }
+          EOF
+      - run: flutter pub get
+      - name: Build APK
+        run: |
+          set +e
+          flutter build apk --release --split-per-abi > build.log 2>&1
+          code=$?
+          if [ $code -ne 0 ]; then
+            echo "===== RINGKASAN ERROR ====="
+            grep -n -E "What went wrong|Dependency|requires|Execution failed|error:|Could not|not found" -A5 build.log | head -50
+            exit $code
+          fi
+          tail -5 build.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: build/app/outputs/flutter-apk/*.apk
